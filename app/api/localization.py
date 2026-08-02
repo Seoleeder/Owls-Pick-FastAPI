@@ -2,7 +2,7 @@
 
 import traceback
 from openai import AsyncOpenAI
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from app.schema.dto.localization_dto import BulkLocalizationRequest, BulkLocalizationResponse
 from app.services.localization_service import LocalizationService
 from app.core.dependencies import get_openai_client
@@ -23,25 +23,24 @@ def get_localization_service(
 @router.post("/games/bulk", response_model=BulkLocalizationResponse)
 async def localize_bulk_games(
     req: BulkLocalizationRequest,
+    background_tasks: BackgroundTasks,
     service: LocalizationService = Depends(get_localization_service)
     ):
     """
-    대량 게임 데이터 한글화 API
-    OpenAI 기반의 비동기 병렬 처리를 통한 대량 데이터 한글화 수행 및 결과 반환
+    대량 게임 데이터 비동기 한글화 요청 수신 API
+    요청 수신 즉시 커넥션을 해제하고 백그라운드 태스크로 한글화 위임
     """
     game_count = len(req.games)
-    logger.info(f"Received Request: Bulk Localization for {game_count} games.")
+    logger.info(f"Received Async Request: Bulk Localization for {game_count} games. Request ID: {req.request_id}")
     
     try:
-        # 비동기 병렬 한글화 처리 위임
-        results = await service.process_bulk_localizations(req.games)
+        # 백그라운드 태스크에 한글화 수행 및 Webhook 전송 로직 등록
+        background_tasks.add_task(service.process_and_callback, req)
         
-        logger.info(f"Localization Completed: Returning {len(results)} results.")
-        
-        return BulkLocalizationResponse(success=True, results=results)
+        return {"message": "Task accepted", "taskId": req.task_id}
     
     except Exception as e:
-        logger.error(f"Python Internal Error (Game Localization):\n{traceback.format_exc()}")
+        logger.error(f"Python Internal Error (Game Localization Initialization):\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))    
 
 

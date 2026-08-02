@@ -2,13 +2,15 @@
 
 import os
 import asyncio
+import json
+import httplib2
 from openai import AsyncOpenAI
 
 from app.core.logger import setup_logger
 from app.utils.file_util import load_prompt_text
 
 from app.schema.enums.genai_fail_reason import GenaiFailReason
-from app.schema.dto.localization_dto import GameItem, LocalizationResult
+from app.schema.dto.localization_dto import GameItem, LocalizationResult, BulkLocalizationRequest, BulkLocalizationResponse
 from app.schema.genai.localization_genai_schema import LocalizationResponseSchema
 
 logger = setup_logger(__name__)
@@ -30,6 +32,49 @@ class LocalizationService:
         
         logger.info(f"[Localization] Initialized with AsyncOpenAI SDK (Model: {self.model_name})")
         
+    async def process_and_callback(self, req: BulkLocalizationRequest):
+        """
+        비동기 병렬 한글화 처리 후 Spring Boot 웹훅으로 결과 전송
+        """
+        logger.info(f"[Localization] Starting background processing for Request ID: {req.request_id}")
+        
+        try:
+            # 데이터 병렬 한글화 파이프라인 가동
+            results = await self.process_bulk_localizations(req.games)
+            response_payload = BulkLocalizationResponse(
+                request_id=req.request_id, 
+                success=True, 
+                results=results
+            )
+        except Exception as e:
+            logger.error(f"[Localization] Failed processing Request ID: {req.request_id} | Error: {str(e)}")
+            response_payload = BulkLocalizationResponse(
+                request_id=req.request_id, 
+                success=False, 
+                results=[]
+            )
+            
+        try:
+            # 결과 전송용 HTTP 클라이언트 생성
+            http = httplib2.Http()
+            headers = {'Content-Type': 'application/json'}
+            
+            # Pydantic 카멜케이스 직렬화 적용
+            body = json.dumps(response_payload.model_dump(by_alias=True))
+            
+            logger.info(f"[Localization] Sending webhook callback for Request ID: {req.request_id} to {req.callback_url}")
+            
+            # httplib2.Response 객체 수신
+            response, content = http.request(req.callback_url, 'POST', headers=headers, body=body)
+            
+             # 4xx 실패 로깅
+            if response.status >= 400:
+                logger.error(f"[Localization] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status}")
+                
+        except Exception as e:
+            logger.error(f"[Localization] Webhook connection error for Request ID: {req.request_id} | Error: {str(e)}")
+            
+    
     async def localize_task (self, game: GameItem, retries: int = 2) -> LocalizationResult:
         """
         단일 게임 데이터 한글화 프로세스
