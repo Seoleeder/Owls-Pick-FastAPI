@@ -37,7 +37,7 @@ async def localize_bulk_games(
         # 백그라운드 태스크에 한글화 수행 및 Webhook 전송 로직 등록
         background_tasks.add_task(service.process_and_callback, req)
         
-        return {"message": "Task accepted", "taskId": req.task_id}
+        return {"message": "Task accepted", "requestId": req.request_id}
     
     except Exception as e:
         logger.error(f"Python Internal Error (Game Localization Initialization):\n{traceback.format_exc()}")
