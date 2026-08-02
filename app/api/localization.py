@@ -20,7 +20,7 @@ def get_localization_service(
     """
     return LocalizationService(client=client)
 
-@router.post("/games/bulk", response_model=BulkLocalizationResponse)
+@router.post("/games/bulk", status_code=202)
 async def localize_bulk_games(
     req: BulkLocalizationRequest,
     background_tasks: BackgroundTasks,
