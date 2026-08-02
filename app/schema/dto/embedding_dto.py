@@ -53,8 +53,16 @@ class EmbeddingData(CamelModel):
 
 class EmbeddingBatchRequest(CamelModel):
     """
-    배치 단위 임베딩 요청 DTO
+    배치 단위 임베딩 비동기 요청 DTO
     """
+    request_id: str = Field(
+        ...,
+        description="비동기 콜백 매핑용 요청 식별자"
+    )
+    callback_url: str = Field(
+        ...,
+        description="작업 완료 후 결과를 수신할 Webhook URL"
+    )
     games: list[EmbeddingData] = Field(
         ...,
         description="임베딩 대상 게임 데이터 배열"
@@ -87,8 +95,12 @@ class EmbeddingResult(CamelModel):
 
 class EmbeddingBatchResponse(CamelModel):
     """
-    FastAPI -> Spring Boot 임베딩 배치 결과 응답 DTO
+    FastAPI -> Spring Boot 임베딩 배치 비동기 응답 DTO
     """
+    request_id: str = Field(
+        ...,
+        description="비동기 콜백 매핑용 요청 식별자"
+    )
     results: list[EmbeddingResult] = Field(
         ...,
         description="배치 단위 임베딩 결과 배열"

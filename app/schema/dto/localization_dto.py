@@ -33,6 +33,14 @@ class BulkLocalizationRequest(CamelModel):
     """
     대량 게임 데이터 한글화 요청 DTO
     """
+    request_id: str = Field(
+        ...,
+        description="비동기 콜백 매핑용 요청 식별자"
+    )
+    callback_url: str = Field(
+        ...,
+        description="완료 후 결과를 전송할 Spring Boot Webhook URL"
+    )
     games: List[GameItem] = Field(
         ..., 
         description="한글화 대상 게임 데이터 목록",
@@ -65,6 +73,10 @@ class BulkLocalizationResponse(CamelModel):
     """
     대량 게임 한글화 응답 DTO
     """
+    request_id: str = Field(
+        ...,
+        description="비동기 콜백 매핑용 요청 식별자"
+    )
     success: bool = Field(
         ..., 
         description="대량 한글화 성공 여부"

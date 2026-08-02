@@ -11,6 +11,14 @@ class KeywordLocalizationRequest(CamelModel):
     """
     키워드 대량 한글화 요청 DTO
     """
+    request_id: str = Field(
+        ...,
+        description="비동기 콜백 매핑용 요청 식별자"
+    )
+    callback_url: str = Field(
+        ...,
+        description="작업 완료 후 결과를 수신할 Webhook URL"
+    )
     keywords: List[str] = Field(
         ..., 
         description="원본 영문 키워드 목록",
@@ -39,6 +47,14 @@ class BulkKeywordLocalizationResponse(CamelModel):
     """
     키워드 대량 한글화 응답 DTO
     """
+    request_id: str = Field(
+        ...,
+        description="비동기 콜백 매핑용 요청 식별자"
+    )
+    success: bool = Field(
+        ...,
+        description="대량 한글화 성공 여부"
+    )
     localization_results: List[KeywordResult] = Field(
         ..., 
         description="한글화 완료 키워드 목록"

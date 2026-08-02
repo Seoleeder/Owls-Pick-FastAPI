@@ -3,13 +3,18 @@
 import os
 import json
 import asyncio
+import httplib2
 from openai import AsyncOpenAI
 
 from app.core.logger import setup_logger
 from app.utils.file_util import load_prompt_text
 
 from app.schema.enums.genai_fail_reason import GenaiFailReason
-from app.schema.dto.keyword_localization_dto import KeywordResult
+from app.schema.dto.keyword_localization_dto import (
+    KeywordResult,
+    KeywordLocalizationRequest,
+    BulkKeywordLocalizationResponse
+)
 from app.schema.genai.keyword_genai_schema import BulkKeywordResponseSchema
 
 
@@ -32,6 +37,45 @@ class KeywordLocalizationService:
         self.semaphore = asyncio.Semaphore(50)
 
         logger.info(f"[KeywordLocalization] Initialized (Model: {self.model_name})")
+
+    async def process_and_callback(self, req: KeywordLocalizationRequest):
+        """
+        비동기 병렬 한글화 처리 후 Spring Boot Webhook으로 결과 전송
+        """
+        logger.info(f"[KeywordLocalization] Starting background processing for Request ID: {req.request_id}")
+        
+        try:
+            # 키워드 병렬 한글화 파이프라인 가동
+            results = await self.process_keyword_localization(req.keywords)
+            response_payload = BulkKeywordLocalizationResponse(
+                request_id=req.request_id, 
+                success=True, 
+                localization_results=results
+            )
+        except Exception as e:
+            logger.error(f"[KeywordLocalization] Failed processing Request ID: {req.request_id} | Error: {str(e)}")
+            response_payload = BulkKeywordLocalizationResponse(
+                request_id=req.request_id, 
+                success=False, 
+                localization_results=[]
+            )
+            
+        try:
+            # 결과 전송용 HTTP 클라이언트 생성
+            http = httplib2.Http()
+            headers = {'Content-Type': 'application/json'}
+            body = json.dumps(response_payload.model_dump(by_alias=True))
+            
+            logger.info(f"[KeywordLocalization] Sending webhook callback for Request ID: {req.request_id} to {req.callback_url}")
+            
+            response, content = http.request(req.callback_url, 'POST', headers=headers, body=body)
+            
+            # 4xx 실패 로깅
+            if response.status >= 400: 
+                logger.error(f"[KeywordLocalization] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status}")
+                
+        except Exception as e:
+            logger.error(f"[KeywordLocalization] Webhook connection error for Request ID: {req.request_id} | Error: {str(e)}")
 
     async def process_keyword_localization(self, keywords: list[str], retries: int = 2) -> list[KeywordResult]:
             """

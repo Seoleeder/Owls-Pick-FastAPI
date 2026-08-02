@@ -1,12 +1,13 @@
 #app\services\review_summary_service.py
 
 import os
+import json
 import asyncio
+import httplib2
 from openai import AsyncOpenAI
 
 from app.core.logger import setup_logger
 from app.utils.file_util import load_prompt_text
-
 from app.schema.enums.genai_fail_reason import GenaiFailReason
 from app.services.factories.review_config_factory import ReviewConfigFactory
 from app.schema.dto.review_summary_dto import ReviewSummaryRequest, ReviewSummaryResponse
@@ -38,6 +39,36 @@ class ReviewSummaryService:
 
         logger.info(f"[GenAI-Review Summary] Initialized with AsyncOpenAI SDK (Model: {self.model_name})")
 
+    async def process_and_callback(self, req: ReviewSummaryRequest):
+        """
+        단일 게임 리뷰 요약 처리 후 웹훅으로 결과 전송
+        """
+        logger.info(f"[GenAI-Review Summary] Starting background processing for Request ID: {req.request_id}")
+        
+        try:
+            # LLM 리뷰 요약 파이프라인 가동 (DTO 형태로 즉시 반환)
+            response_payload = await self.summarize_reviews(req)
+        except Exception as e:
+            logger.error(f"[GenAI-Review Summary] Failed processing Request ID: {req.request_id} | Error: {str(e)}")
+            response_payload = self._build_fallback_result(req.request_id, GenaiFailReason.NETWORK_ERROR)
+            
+        try:
+            # 결과 전송용 HTTP 클라이언트 생성
+            http = httplib2.Http()
+            headers = {'Content-Type': 'application/json'}
+            body = json.dumps(response_payload.model_dump(by_alias=True))
+            
+            logger.info(f"[GenAI-Review Summary] Sending webhook callback for Request ID: {req.request_id} to {req.callback_url}")
+            
+            response, content = http.request(req.callback_url, 'POST', headers=headers, body=body)
+            
+            # 4xx 이상 에러 발생 시 실패 로그 기록
+            if response.status >= 400:
+                logger.error(f"[GenAI-Review Summary] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status}")
+                   
+        except Exception as e:
+            logger.error(f"[GenAI-Review Summary] Webhook connection error for Request ID: {req.request_id} | Error: {str(e)}")
+            
     async def summarize_reviews(self, request: ReviewSummaryRequest, retries: int = 2) -> ReviewSummaryResponse:
         """
         단일 게임 리뷰 요약 파이프라인.
@@ -98,6 +129,7 @@ class ReviewSummaryService:
 
                 # 정상 파싱 성공 시 DTO 매핑 후 반환
                 return ReviewSummaryResponse(
+                    request_id=request.request_id,
                     summary_text=parsed_data.summary_text,
                     positive_keywords=parsed_data.positive_keywords,
                     negative_keywords=parsed_data.negative_keywords,
@@ -116,11 +148,12 @@ class ReviewSummaryService:
                 logger.error(f"[GenAI-Review Summary] Final Failure - GameId: {request.game_id} | Error: {str(e)}")
                 return self._build_fallback_result(GenaiFailReason.NETWORK_ERROR)
     
-    def _build_fallback_result(self, reason: GenaiFailReason) -> ReviewSummaryResponse:
+    def _build_fallback_result(self, request_id: str, reason: GenaiFailReason) -> ReviewSummaryResponse:
         """
         실패 건에 대한 에러 응답 객체 생성
         """
         return ReviewSummaryResponse(
+            request_id=request_id,
             summary_text=None,
             positive_keywords=[],
             negative_keywords=[],
