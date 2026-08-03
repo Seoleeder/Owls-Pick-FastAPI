@@ -3,9 +3,10 @@
 import os
 import json
 import asyncio
-import httplib2
-from openai import AsyncOpenAI
+import httpx
+import gc
 
+from app.core import events
 from app.core.logger import setup_logger
 from app.utils.file_util import load_prompt_text
 
@@ -21,10 +22,10 @@ from app.schema.genai.keyword_genai_schema import BulkKeywordResponseSchema
 logger = setup_logger(__name__)
 
 class KeywordLocalizationService:
-    def __init__(self, client: AsyncOpenAI):
+    def __init__(self):
         
-        # 의존성 주입을 통해 전역 클라이언트 매핑
-        self.client = client
+        # 전역 생명주기(Lifespan)에서 초기화된 싱글톤 OpenAI 클라이언트 매핑
+        self.client = events.openai_client
         
         # 키워드 한글화 전용 환경 변수 로드
         self.model_name = os.getenv("KEYWORD_MODEL_NAME", "gpt-5.4-mini")
@@ -61,21 +62,25 @@ class KeywordLocalizationService:
             )
             
         try:
-            # 결과 전송용 HTTP 클라이언트 생성
-            http = httplib2.Http()
+            # Webhook 전송용 헤더 및 바디 구성
             headers = {'Content-Type': 'application/json'}
             body = json.dumps(response_payload.model_dump(by_alias=True))
             
             logger.info(f"[KeywordLocalization] Sending webhook callback for Request ID: {req.request_id} to {req.callback_url}")
             
-            response, content = http.request(req.callback_url, 'POST', headers=headers, body=body)
-            
-            # 4xx 실패 로깅
-            if response.status >= 400: 
-                logger.error(f"[KeywordLocalization] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status}")
+            # httpx를 활용한 비동기 네트워크 통신 수행
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.post(req.callback_url, headers=headers, content=body)
+                
+                # 4xx 실패 로깅
+                if response.status_code >= 400: 
+                    logger.error(f"[KeywordLocalization] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status_code}")
                 
         except Exception as e:
             logger.error(f"[KeywordLocalization] Webhook connection error for Request ID: {req.request_id} | Error: {str(e)}")
+        finally:
+            # 사용 완료 객체 물리 메모리 즉시 반환
+            gc.collect()
 
     async def process_keyword_localization(self, keywords: list[str], retries: int = 2) -> list[KeywordResult]:
             """
@@ -90,7 +95,7 @@ class KeywordLocalizationService:
             # API 요청을 위한 사용자 프롬프트 구성
             prompt = f"다음 키워드들을 번역해 주세요:\n{json.dumps(keywords, ensure_ascii=False)}"
 
-            # 네트워크 지연 및 API 일시 오류 대응을 위한 재시도 루프
+            # 네트워크 지연 및 API 일시 오류 대응을 위한 지수 백오프 재시도 루프
             for attempt in range(retries):
                 try:
                     # OpenAI API 호출 및 파싱 결과 추출

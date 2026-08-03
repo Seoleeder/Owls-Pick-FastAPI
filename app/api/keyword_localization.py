@@ -1,8 +1,6 @@
 #app\api\keyword_localization.py
 
 import traceback
-from openai import AsyncOpenAI
-from app.core.dependencies import get_openai_client
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from app.schema.dto.keyword_localization_dto import KeywordLocalizationRequest
 from app.services.keyword_localization_service import KeywordLocalizationService
@@ -11,13 +9,11 @@ from app.core.logger import setup_logger
 logger = setup_logger(__name__)
 router = APIRouter()
 
-def get_keyword_localization_service(
-    client: AsyncOpenAI = Depends(get_openai_client)
-) -> KeywordLocalizationService:
+def get_keyword_localization_service() -> KeywordLocalizationService:
     """
     LocalizationService 의존성 주입(DI)용 팩토리 함수
     """
-    return KeywordLocalizationService(client=client)
+    return KeywordLocalizationService()
 
 @router.post("/keywords/bulk", status_code=202)
 async def localize_bulk_keywords(
@@ -33,7 +29,7 @@ async def localize_bulk_keywords(
     logger.info(f"Received Async Request: Keyword Localization for {kw_count} keywords. Request ID: {req.request_id}")
     
     try:
-        # 백그라운드 태스크에 키워드 한글화 수행 및 Webhook 전송 로직 등록
+        # 백그라운드 태스크에 키워드 한글화 및 Webhook 콜백 전송 로직 등록
         background_tasks.add_task(service.process_and_callback, req)
         return {"message": "Task accepted", "requestId": req.request_id}
         

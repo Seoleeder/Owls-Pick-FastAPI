@@ -3,9 +3,10 @@
 import os
 import json
 import asyncio
-import httplib2
-from openai import AsyncOpenAI
+import httpx
+import gc
 
+from app.core import events
 from app.core.logger import setup_logger
 from app.utils.file_util import load_prompt_text
 from app.schema.enums.genai_fail_reason import GenaiFailReason
@@ -16,10 +17,10 @@ from app.schema.genai.review_summary_genai_schema import ReviewSummaryResponseSc
 logger = setup_logger(__name__)
 
 class ReviewSummaryService:
-    def __init__(self, client: AsyncOpenAI):
+    def __init__(self):
         
-        # 의존성 주입을 통해 전역 클라이언트 매핑
-        self.client = client
+        # 전역 생명주기(Lifespan)에서 초기화된 싱글톤 OpenAI 클라이언트 매핑
+        self.client = events.openai_client
         
         # 리뷰 요약 전용 환경 변수 로드
         self.model_name = os.getenv("REVIEW_MODEL_NAME", "gpt-5.4-mini")
@@ -28,11 +29,6 @@ class ReviewSummaryService:
 
         # 시스템 프롬프트 로드
         self.system_instruction = load_prompt_text("review_summary_instruction.md")
-
-       # 비동기 OpenAI 클라이언트 초기화
-        self.client = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
 
         # API Rate Limit 방어 및 서버 과부하 방지를 위한 동시성 제어
         self.semaphore = asyncio.Semaphore(self.semaphore_limit)
@@ -53,21 +49,25 @@ class ReviewSummaryService:
             response_payload = self._build_fallback_result(req.request_id, GenaiFailReason.NETWORK_ERROR)
             
         try:
-            # 결과 전송용 HTTP 클라이언트 생성
-            http = httplib2.Http()
+            # Webhook 전송용 헤더 및 바디 구성
             headers = {'Content-Type': 'application/json'}
             body = json.dumps(response_payload.model_dump(by_alias=True))
             
             logger.info(f"[GenAI-Review Summary] Sending webhook callback for Request ID: {req.request_id} to {req.callback_url}")
             
-            response, content = http.request(req.callback_url, 'POST', headers=headers, body=body)
-            
-            # 4xx 이상 에러 발생 시 실패 로그 기록
-            if response.status >= 400:
-                logger.error(f"[GenAI-Review Summary] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status}")
-                   
+            # httpx를 활용한 비동기 네트워크 통신 수행
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.post(req.callback_url, headers=headers, content=body)
+                
+                # 4xx 이상 에러 발생 시 실패 로그 기록
+                if response.status_code >= 400:
+                    logger.error(f"[GenAI-Review Summary] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status_code}")
+                    
         except Exception as e:
             logger.error(f"[GenAI-Review Summary] Webhook connection error for Request ID: {req.request_id} | Error: {str(e)}")
+        finally:
+            # 사용 완료 객체 물리 메모리 즉시 반환
+            gc.collect()
             
     async def summarize_reviews(self, request: ReviewSummaryRequest, retries: int = 2) -> ReviewSummaryResponse:
         """
@@ -77,7 +77,7 @@ class ReviewSummaryService:
         # 불필요한 API 호출 방지를 위한 데이터 조기 검증
         if not request.review_texts:
             logger.debug(f"[GenAI-Review Summary] Insufficient data. Skipping - GameId: {request.game_id}")
-            return self._build_fallback_result(GenaiFailReason.INSUFFICIENT_DATA)
+            return self._build_fallback_result(request.request_id, GenaiFailReason.INSUFFICIENT_DATA)
         
         # 실제 데이터 분포(긍/부정 비율)에 따른 동적 설정 빌드
         # 팩토리를 통해 리뷰 점수가 반영된 동적 시스템 지시문 생성
@@ -116,7 +116,7 @@ class ReviewSummaryService:
                         # 모델 안전 정책 위반으로 인한 응답 거절 처리
                         if item.type == "refusal":
                             logger.warning(f"[GenAI-Review Summary] Refused by Safety Filter - GameId: {request.game_id}")
-                            return self._build_fallback_result(GenaiFailReason.SAFETY_FILTER_REJECTED)
+                            return self._build_fallback_result(request.request_id, GenaiFailReason.SAFETY_FILTER_REJECTED)
                         
                         # 파싱된 Pydantic 객체 추출
                         if getattr(item, "parsed", None):
@@ -125,8 +125,8 @@ class ReviewSummaryService:
                 # 파싱 결과 누락 시 예외 로그 기록 후 실패 처리
                 if not parsed_data:
                     logger.warning(f"[GenAI-Review Summary] No valid parsed content returned - GameId: {request.game_id}")
-                    return self._build_fallback_result(GenaiFailReason.INVALID_RESPONSE)
-
+                    return self._build_fallback_result(request.request_id, GenaiFailReason.INVALID_RESPONSE)
+                
                 # 정상 파싱 성공 시 DTO 매핑 후 반환
                 return ReviewSummaryResponse(
                     request_id=request.request_id,
@@ -146,8 +146,8 @@ class ReviewSummaryService:
                 
                 # 설정된 재시도 횟수 초과 시 최종 실패 로깅 및 에러 반환
                 logger.error(f"[GenAI-Review Summary] Final Failure - GameId: {request.game_id} | Error: {str(e)}")
-                return self._build_fallback_result(GenaiFailReason.NETWORK_ERROR)
-    
+                return self._build_fallback_result(request.request_id, GenaiFailReason.NETWORK_ERROR)
+            
     def _build_fallback_result(self, request_id: str, reason: GenaiFailReason) -> ReviewSummaryResponse:
         """
         실패 건에 대한 에러 응답 객체 생성

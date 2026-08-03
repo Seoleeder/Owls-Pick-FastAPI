@@ -3,9 +3,10 @@
 import os
 import asyncio
 import json
-import httplib2
-from openai import AsyncOpenAI
+import httpx
+import gc
 
+from app.core import events
 from app.core.logger import setup_logger
 from app.utils.file_util import load_prompt_text
 
@@ -16,10 +17,10 @@ from app.schema.genai.localization_genai_schema import LocalizationResponseSchem
 logger = setup_logger(__name__)
 
 class LocalizationService:
-    def __init__(self, client: AsyncOpenAI):
+    def __init__(self):
         
-        # 의존성 주입을 통해 전역 클라이언트 매핑
-        self.client = client
+        # 싱글톤 OpenAI 클라이언트 매핑
+        self.client = events.openai_client
         
         # 한글화 전용 환경 변수 로드
         self.model_name = os.getenv("LOCALIZATION_MODEL_NAME", "gpt-5.4-mini")
@@ -27,19 +28,19 @@ class LocalizationService:
 
         self.system_instruction = load_prompt_text("localization_instruction.md")
         
-        # API Rate Limit 방어 및 서버 과부하 방지를 위한 동시성 제어
+        # API Rate Limit 방어 및 프로세스 과부하 방지를 위한 동시성 제어
         self.semaphore = asyncio.Semaphore(50)
         
         logger.info(f"[Localization] Initialized with AsyncOpenAI SDK (Model: {self.model_name})")
         
     async def process_and_callback(self, req: BulkLocalizationRequest):
         """
-        비동기 병렬 한글화 처리 후 Spring Boot 웹훅으로 결과 전송
+        비동기 병렬 한글화 처리 후 Spring Boot 웹훅으로 최종 결과 전송
         """
         logger.info(f"[Localization] Starting background processing for Request ID: {req.request_id}")
         
         try:
-            # 데이터 병렬 한글화 파이프라인 가동
+            # 데이터 병렬 한글화 수행 및 결과 객체 취합
             results = await self.process_bulk_localizations(req.games)
             response_payload = BulkLocalizationResponse(
                 request_id=req.request_id, 
@@ -55,24 +56,24 @@ class LocalizationService:
             )
             
         try:
-            # 결과 전송용 HTTP 클라이언트 생성
-            http = httplib2.Http()
+            # Webhook 전송용 헤더 및 바디 구성
             headers = {'Content-Type': 'application/json'}
-            
-            # Pydantic 카멜케이스 직렬화 적용
             body = json.dumps(response_payload.model_dump(by_alias=True))
             
             logger.info(f"[Localization] Sending webhook callback for Request ID: {req.request_id} to {req.callback_url}")
             
-            # httplib2.Response 객체 수신
-            response, content = http.request(req.callback_url, 'POST', headers=headers, body=body)
-            
-             # 4xx 실패 로깅
-            if response.status >= 400:
-                logger.error(f"[Localization] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status}")
+            # httpx를 활용한 비동기 네트워크 통신 수행
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.post(req.callback_url, headers=headers, content=body)
+                
+                if response.status_code >= 400:
+                    logger.error(f"[Localization] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status_code}")
                 
         except Exception as e:
             logger.error(f"[Localization] Webhook connection error for Request ID: {req.request_id} | Error: {str(e)}")
+        finally:
+            # 사용 완료 객체 물리 메모리 즉시 반환
+            gc.collect()
             
     
     async def localize_task (self, game: GameItem, retries: int = 2) -> LocalizationResult:
@@ -97,10 +98,10 @@ class LocalizationService:
         
         user_prompt = "\n\n".join(prompt_parts) 
         
-        # 네트워크 지연 및 API 일시 오류 대응을 위한 재시도 루프
+        # 네트워크 지연 및 API 일시 오류 대응을 위한 지수 백오프 재시도 루프
         for attempt in range(retries):
             try:
-                # 동시성 한도 내에서만 API 요청 실행
+                # 할당된 세마포어 한도 내에서만 API 요청 실행
                 async with self.semaphore:  
                     # OpenAI API 호출 (Structured Outputs 적용)
                     response = await self.client.responses.parse(

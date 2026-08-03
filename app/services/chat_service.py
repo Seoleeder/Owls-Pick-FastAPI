@@ -2,7 +2,7 @@
 
 import os
 import logging
-from openai import AsyncOpenAI
+from app.core import events
 from app.schema.dto.owls_chat_dto import (
     QueryEmbeddingRequest, 
     RagGenerationRequest, 
@@ -20,9 +20,9 @@ class ChatService:
     독립 검색어 추출, 벡터 임베딩, 최종 답변 및 세션 제목 생성 담당
     """
     
-    def __init__(self, client: AsyncOpenAI):
-        # 의존성 주입을 통해 전역 클라이언트 매핑
-        self.client = client
+    def __init__(self):
+        # 전역 생명주기(Lifespan)에서 초기화된 싱글톤 OpenAI 클라이언트 매핑
+        self.client = events.openai_client
         
        # 모델 사양 환경 변수 로드
         self.chat_model = os.getenv("CHAT_MODEL_NAME", "gpt-5.4-mini") 
@@ -32,11 +32,6 @@ class ChatService:
         self.output_dimension = int(os.getenv("EMBEDDING_OUTPUT_DIMENSION", "768"))
         self.chat_temperature = float(os.getenv("CHAT_TEMPERATURE", "0.3"))
         self.title_temperature = float(os.getenv("TITLE_GENERATION_TEMPERATURE", "0.1"))
-        
-        # 비동기 OpenAI 클라이언트 초기화 
-        self.client = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
         
         # 시스템 프롬프트 메모리 로드
         self._load_resources()
@@ -54,7 +49,7 @@ class ChatService:
 
     async def extract_query_embedding(self, request: QueryEmbeddingRequest) -> list[float]:
         """
-        대화 맥락이 반영된 독립 검색어(Standalone Query)를 추출한 후 벡터 임베딩을 수행함
+        대화 맥락이 반영된 독립 검색어(Standalone Query) 추출 및 벡터 임베딩 수행
         """
         
         # 임베딩 대상 텍스트 초기화
@@ -87,7 +82,7 @@ class ChatService:
                 processed_message = request.user_message
 
         try:
-            # 최종 확정된 텍스트를 기반으로 차원 축소가 적용된 임베딩 API 호출
+            # 최종 확정 텍스트 기반 차원 축소 임베딩 API 호출
             embedding_response = await self.client.embeddings.create(
                 model=self.embedding_model,
                 input=processed_message,
@@ -130,6 +125,8 @@ class ChatService:
                 text_format=RagGenerationResponse,    # DTO 규격 강제
                 store=False                                 # 단건 처리용 상태 저장 비활성화
             )
+            
+            parsed_data = None
             
             # 방어적 이중 루프 파싱
             for output in response.output:
