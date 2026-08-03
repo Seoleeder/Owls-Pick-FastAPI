@@ -3,10 +3,11 @@
 import os
 import json
 import asyncio
-import httplib2
+import httpx
+import gc
 from typing import List
-from openai import AsyncOpenAI
 
+from app.core import events
 from app.core.logger import setup_logger
 from app.schema.enums.genai_fail_reason import GenaiFailReason
 from app.services.factories.embedding_source_factory import EmbeddingSourceFactory
@@ -20,10 +21,10 @@ class EmbeddingService:
     Owls 챗봇 검색용 게임 메타데이터 임베딩 서비스
     """
     
-    def __init__(self, client: AsyncOpenAI):
+    def __init__(self):
         
-        # 의존성 주입을 통해 전역 클라이언트 매핑
-        self.client = client
+        # 전역 생명주기(Lifespan)에서 초기화된 싱글톤 OpenAI 클라이언트 매핑
+        self.client = events.openai_client
         
         # 임베딩 전용 환경 변수 로드
         self.model_name = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-3-small")
@@ -34,11 +35,6 @@ class EmbeddingService:
         # API Rate Limit 방어를 위한 배치 크기 및 지연 시간 설정
         self.micro_batch_size = int(os.getenv("EMBEDDING_MICRO_BATCH_SIZE", "10"))
         self.sleep_seconds = float(os.getenv("EMBEDDING_SLEEP_SECONDS", "1.0"))
-
-        # 비동기 OpenAI 클라이언트 초기화
-        self.client = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY")
-        )
 
         # API Rate Limit 방어 및 서버 과부하 방지를 위한 동시성 제어
         self.semaphore = asyncio.Semaphore(self.semaphore_limit)
@@ -71,20 +67,25 @@ class EmbeddingService:
             )
             
         try:
-            # Webhook 전송용 HTTP 클라이언트 구성
-            http = httplib2.Http()
+            # Webhook 전송용 헤더 및 바디 구성
             headers = {'Content-Type': 'application/json'}
             body = json.dumps(response_payload.model_dump(by_alias=True))
             
             logger.info(f"[GenAI-Embedding] Sending webhook callback for Request ID: {req.request_id} to {req.callback_url}")
             
-            response, content = http.request(req.callback_url, 'POST', headers=headers, body=body)
-            
-            if response.status >= 400: 
-                logger.error(f"[GenAI-Embedding] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status}")
+            # httpx를 활용한 비동기 네트워크 통신 수행
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.post(req.callback_url, headers=headers, content=body)
+                
+                # 4xx 실패 로깅
+                if response.status_code >= 400: 
+                    logger.error(f"[GenAI-Embedding] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status_code}")
                 
         except Exception as e:
             logger.error(f"[GenAI-Embedding] Webhook connection error for Request ID: {req.request_id} | Error: {str(e)}")
+        finally:
+            # 사용 완료 객체 물리 메모리 즉시 반환
+            gc.collect()
 
     async def generate_embeddings(self, batch: List[EmbeddingData], retries: int = 2) -> List[EmbeddingResult]:
         """
