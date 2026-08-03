@@ -1,8 +1,6 @@
 #app\api\review_summary.py
 
 import traceback
-from openai import AsyncOpenAI
-from app.core.dependencies import get_openai_client
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from app.schema.dto.review_summary_dto import ReviewSummaryRequest
 from app.services.review_summary_service import ReviewSummaryService
@@ -11,13 +9,11 @@ from app.core.logger import setup_logger
 logger = setup_logger(__name__)
 router = APIRouter()
 
-def get_review_summary_service(
-    client: AsyncOpenAI = Depends(get_openai_client)
-) -> ReviewSummaryService:
+def get_review_summary_service() -> ReviewSummaryService:
     """
     ReviewSummaryService 의존성 주입(DI)용 팩토리 함수
     """
-    return ReviewSummaryService(client=client)
+    return ReviewSummaryService()
 
 @router.post("/reviews", status_code=202)
 async def summarize_game_reviews(
@@ -26,7 +22,7 @@ async def summarize_game_reviews(
     service: ReviewSummaryService = Depends(get_review_summary_service)
     ):
     """
-    게임 리뷰 요약 및 긍정/부정 키워드 추출 비동기 요청 API
+    게임 리뷰 요약 및 긍/부정 키워드 추출 비동기 요청 API
     요청 수신 즉시 커넥션을 해제하고 백그라운드 태스크로 요약 위임
     """
     logger.info(f"Received Async Request: Review Summary for Game ID {req.game_id} ({len(req.review_texts)} reviews). Request ID: {req.request_id}")
