@@ -33,7 +33,7 @@ class LocalizationService:
         
         logger.info(f"[Localization] Initialized with AsyncOpenAI SDK (Model: {self.model_name})")
         
-    async def process_and_callback(self, req: BulkLocalizationRequest):
+    async def process_and_callback(self, req: BulkLocalizationRequest, retries: int = 2):
         """
         비동기 병렬 한글화 처리 후 Spring Boot 웹훅으로 최종 결과 전송
         """
@@ -55,6 +55,7 @@ class LocalizationService:
                 results=[]
             )
             
+        
         try:
             # Webhook 전송용 헤더 및 바디 구성
             headers = {'Content-Type': 'application/json'}
@@ -62,12 +63,26 @@ class LocalizationService:
             
             logger.info(f"[Localization] Sending webhook callback for Request ID: {req.request_id} to {req.callback_url}")
             
-            # httpx를 활용한 비동기 네트워크 통신 수행
-            async with httpx.AsyncClient() as http_client:
-                response = await http_client.post(req.callback_url, headers=headers, content=body)
-                
-                if response.status_code >= 400:
-                    logger.error(f"[Localization] Webhook delivery failed for Request ID: {req.request_id} | Status: {response.status_code}")
+            # 지수 백오프 재시도 루프
+            for attempt in range(retries):
+                try:
+                    # httpx를 활용한 비동기 네트워크 통신 수행
+                    async with httpx.AsyncClient(timeout=10.0) as http_client:
+                        response = await http_client.post(req.callback_url, headers=headers, content=body)
+                        response.raise_for_status()
+                        
+                        logger.info(f"[Localization] Webhook delivered successfully - Request ID: {req.request_id}")
+                        break
+                except Exception as e:
+                    # 일시적 오류 발생 시 점진적 대기(2초, 4초) 후 재시도
+                    if attempt < retries:
+                        sleep_time = (attempt + 1) * 2
+                        logger.warning(f"[Localization] Webhook delivery failed, retrying {attempt + 1}/{retries}... Request ID: {req.request_id} ({str(e)})")
+                        await asyncio.sleep(sleep_time)
+                        continue
+                    
+                    # 설정된 재시도 횟수 초과 시 최종 실패 처리
+                    logger.error(f"[Localization] Final Webhook delivery failure - Request ID: {req.request_id} | Error: {str(e)}")
                 
         except Exception as e:
             logger.error(f"[Localization] Webhook connection error for Request ID: {req.request_id} | Error: {str(e)}")
