@@ -52,4 +52,4 @@ COPY --chown=fastapi:fastapi . .
 EXPOSE 8000
 
 # Uvicorn을 이용한 FastAPI 애플리케이션 구동 명령어 정의
-ENTRYPOINT ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+ENTRYPOINT ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "3"]
