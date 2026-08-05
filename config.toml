@@ -1,7 +1,11 @@
 # config.toml
 
+[localization]
+game_semaphore_limit = 5
+keyword_semaphore_limit = 50
+
 [review]
-semaphore_limit = 10
+semaphore_limit = 5
 
 [hltb]
 semaphore_limit = 10

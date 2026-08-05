@@ -9,6 +9,7 @@ from typing import List
 
 from app.core import events
 from app.core.logger import setup_logger
+from app.core.settings import get_settings
 from app.schema.enums.genai_fail_reason import GenaiFailReason
 from app.services.factories.embedding_source_factory import EmbeddingSourceFactory
 
@@ -22,6 +23,7 @@ class EmbeddingService:
     """
     
     def __init__(self):
+        settings = get_settings()
         
         # 전역 생명주기(Lifespan)에서 초기화된 싱글톤 OpenAI 클라이언트 매핑
         self.client = events.openai_client
@@ -37,7 +39,7 @@ class EmbeddingService:
         self.sleep_seconds = float(os.getenv("EMBEDDING_SLEEP_SECONDS", "1.0"))
 
         # API Rate Limit 방어 및 서버 과부하 방지를 위한 동시성 제어
-        self.semaphore = asyncio.Semaphore(self.semaphore_limit)
+        self.semaphore = asyncio.Semaphore(settings.embedding.max_concurrent_tasks)
 
         logger.info(f"[GenAI-Embedding] Initialized with AsyncOpenAI SDK (Model: {self.model_name}, Dimension: {self.output_dimension})")
 
