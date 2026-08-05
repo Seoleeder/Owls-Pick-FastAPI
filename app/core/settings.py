@@ -12,6 +12,10 @@ from pydantic_settings import (
 # ==========================================
 # 정적 인프라 설정 (TOML 파일 매핑)
 # ==========================================
+class LocalizationSettings(BaseSettings):
+    game_semaphore_limit: int
+    keyword_semaphore_limit: int
+    
 class ReviewSettings(BaseSettings):
     semaphore_limit: int
 
@@ -34,6 +38,8 @@ class Settings(BaseSettings):
     app_env: str = "local"
     openai_api_key: str
     
+    # TOML 섹션별 매핑
+    localization: LocalizationSettings
     review: ReviewSettings
     hltb: HltbSettings
     embedding: EmbeddingSettings

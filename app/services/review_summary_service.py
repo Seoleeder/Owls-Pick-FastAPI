@@ -8,6 +8,7 @@ import gc
 
 from app.core import events
 from app.core.logger import setup_logger
+from app.core.settings import get_settings
 from app.utils.file_util import load_prompt_text
 from app.schema.enums.genai_fail_reason import GenaiFailReason
 from app.services.factories.review_config_factory import ReviewConfigFactory
@@ -18,6 +19,7 @@ logger = setup_logger(__name__)
 
 class ReviewSummaryService:
     def __init__(self):
+        settings = get_settings()
         
         # 전역 생명주기(Lifespan)에서 초기화된 싱글톤 OpenAI 클라이언트 매핑
         self.client = events.openai_client
@@ -31,7 +33,7 @@ class ReviewSummaryService:
         self.system_instruction = load_prompt_text("review_summary_instruction.md")
 
         # API Rate Limit 방어 및 서버 과부하 방지를 위한 동시성 제어
-        self.semaphore = asyncio.Semaphore(self.semaphore_limit)
+        self.semaphore = asyncio.Semaphore(settings.review.semaphore_limit)
 
         logger.info(f"[GenAI-Review Summary] Initialized with AsyncOpenAI SDK (Model: {self.model_name})")
 
