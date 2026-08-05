@@ -8,6 +8,7 @@ import gc
 
 from app.core import events
 from app.core.logger import setup_logger
+from app.core.settings import get_settings
 from app.utils.file_util import load_prompt_text
 
 from app.schema.enums.genai_fail_reason import GenaiFailReason
@@ -23,6 +24,7 @@ logger = setup_logger(__name__)
 
 class KeywordLocalizationService:
     def __init__(self):
+        settings = get_settings()
         
         # 전역 생명주기(Lifespan)에서 초기화된 싱글톤 OpenAI 클라이언트 매핑
         self.client = events.openai_client
@@ -35,7 +37,7 @@ class KeywordLocalizationService:
         self.system_instruction = load_prompt_text("keyword_instruction.md")
 
         # API Rate Limit 방어 및 서버 과부하 방지를 위한 동시성 제어
-        self.semaphore = asyncio.Semaphore(50)
+        self.semaphore = asyncio.Semaphore(settings.localization.keyword_semaphore_limit)
 
         logger.info(f"[KeywordLocalization] Initialized (Model: {self.model_name})")
 
