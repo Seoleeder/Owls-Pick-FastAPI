@@ -53,13 +53,13 @@ instrumentator.expose(app, endpoint="/metrics", tags=["System"])
 # API 라우터 등록 
 app.include_router(
     localization.router, 
-    prefix="/api/localization", 
+    prefix="/api/genai/localization", 
     tags=["Game Localization"]
 )
 
 app.include_router(
     keyword_localization.router, 
-    prefix="/api/localization", 
+    prefix="/api/genai/localization", 
     tags=["Keyword Localization"]
 )
 
@@ -71,7 +71,7 @@ app.include_router(
 
 app.include_router(
     hltb.router,
-    prefix="/api/hltb",
+    prefix="/api/init/hltb",
     tags=["HowLongToBeat"]
     
 )
