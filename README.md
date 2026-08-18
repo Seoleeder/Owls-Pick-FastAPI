@@ -1,4 +1,4 @@
-# Owl's Pick - AI & Data Scraper Engine
+# Owl's Pick AI Engine (GenAI 파이프라인 및 데이터 스크래핑 마이크로서비스)
 
 > OpenAI API 기반 비동기 GenAI 파이프라인 및 HowLongToBeat 메타데이터 수집을 전담하는 FastAPI 서브 모듈
 
